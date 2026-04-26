@@ -21,7 +21,7 @@ const greg_unix_offset = 0x01B21DD213814000;
 
 /// An RFC 9562 UUID implementation with a union-based design for type-safe version handling.
 /// This supports all versions (1-8) through both a unified interface and version-specific types.
-pub const Uuid = packed union {
+pub const Uuid = packed union(u128) {
     v1: V1,
     v2: V2,
     v3: V3,
@@ -339,13 +339,13 @@ pub const Uuid = packed union {
             seq: u14,
 
             /// Get the current timestamp with thread-safe clock sequence.
-            pub fn safe() Timestamp {
-                return SafeClockSequence(Timestamp).System.next();
+            pub fn safe(io: std.Io) Timestamp {
+                return SafeClockSequence(Timestamp).System.next(io);
             }
 
             /// Get the current timestamp with singled-threaded sequential clock sequence.
-            pub fn fast() Timestamp {
-                return FastClockSequence(Timestamp).System.next();
+            pub fn fast(io: std.Io) Timestamp {
+                return FastClockSequence(Timestamp).System.next(io);
             }
         };
 
@@ -365,8 +365,8 @@ pub const Uuid = packed union {
         }
 
         /// Create a V1 UUID with the current timestamp and node ID.
-        pub fn now(node: u48) V1 {
-            return .init(.safe(), node);
+        pub fn now(node: u48, io: std.Io) V1 {
+            return .init(.safe(io), node);
         }
 
         /// Convert to the generic Uuid union type.
@@ -944,13 +944,13 @@ pub const Uuid = packed union {
             seq: u14,
 
             /// Get the current timestamp with thread-safe clock sequence.
-            pub fn safe() Timestamp {
-                return SafeClockSequence(Timestamp).System.next();
+            pub fn safe(io: std.Io) Timestamp {
+                return SafeClockSequence(Timestamp).System.next(io);
             }
 
             /// Get the current timestamp with singled-threaded sequential clock sequence.
-            pub fn fast() Timestamp {
-                return FastClockSequence(Timestamp).System.next();
+            pub fn fast(io: std.Io) Timestamp {
+                return FastClockSequence(Timestamp).System.next(io);
             }
         };
 
@@ -970,8 +970,8 @@ pub const Uuid = packed union {
         }
 
         /// Create a V6 UUID with the current timestamp and node ID.
-        pub fn now(node: u48) V6 {
-            return .init(.safe(), node);
+        pub fn now(node: u48, io: std.Io) V6 {
+            return .init(.safe(io), node);
         }
 
         /// Convert to the generic Uuid union type.
@@ -1094,13 +1094,13 @@ pub const Uuid = packed union {
             seq: u74,
 
             /// Get the current timestamp with thread-safe clock sequence.
-            pub fn safe() Timestamp {
-                return SafeClockSequence(Timestamp).System.next();
+            pub fn safe(io: std.Io) Timestamp {
+                return SafeClockSequence(Timestamp).System.next(io);
             }
 
             /// Get the current timestamp with singled-threaded sequential clock sequence.
-            pub fn fast() Timestamp {
-                return FastClockSequence(Timestamp).System.next();
+            pub fn fast(io: std.Io) Timestamp {
+                return FastClockSequence(Timestamp).System.next(io);
             }
         };
 
@@ -1118,8 +1118,8 @@ pub const Uuid = packed union {
         }
 
         /// Create a V7 UUID with the current timestamp.
-        pub fn now() V7 {
-            return .init(.safe());
+        pub fn now(io: std.Io) V7 {
+            return .init(.safe(io));
         }
 
         /// Convert to the generic Uuid union type.
@@ -1328,27 +1328,28 @@ pub const Uuid = packed union {
     /// A clock abstraction for timestamp generation in time-based UUIDs.
     pub const Clock = struct {
         ptr: *anyopaque,
-        nanoTimestampFn: *const fn (ptr: *anyopaque) i128,
+        nanoTimestampFn: *const fn (ptr: *anyopaque, io: std.Io) i128,
 
         pub const system = Clock.init(&.{}, systemClock);
         pub const zero = Clock.init(&.{}, zeroClock);
 
-        pub fn init(ptr: *anyopaque, nanoTimestampFn: *const fn (ptr: *anyopaque) i128) Clock {
+        pub fn init(ptr: *anyopaque, nanoTimestampFn: *const fn (ptr: *anyopaque, io: std.Io) i128) Clock {
             return Clock{
                 .ptr = ptr,
                 .nanoTimestampFn = nanoTimestampFn,
             };
         }
 
-        pub fn nanoTimestamp(self: *const Clock) i128 {
-            return self.nanoTimestampFn(self.ptr);
+        pub fn nanoTimestamp(self: *const Clock, io: std.Io) i128 {
+            return self.nanoTimestampFn(self.ptr, io);
         }
 
-        fn systemClock(_: *anyopaque) i128 {
-            return std.time.nanoTimestamp();
+        fn systemClock(_: *anyopaque, io: std.Io) i128 {
+            return std.Io.Clock.now(.real, io).toNanoseconds();
         }
 
-        fn zeroClock(_: *anyopaque) i128 {
+        fn zeroClock(_: *anyopaque, io: std.Io) i128 {
+            _ = io; // autofix
             return 0;
         }
     };
@@ -1380,8 +1381,8 @@ pub const Uuid = packed union {
             acc: Tick = 0,
             seq: Seq = 0,
 
-            pub fn next(self: *@This()) Timestamp {
-                const actual_tick = self.tickTimestamp();
+            pub fn next(self: *@This(), io: std.Io) Timestamp {
+                const actual_tick = self.tickTimestamp(io);
 
                 const delta = actual_tick -| self.last_tick;
                 self.acc -|= delta;
@@ -1409,8 +1410,8 @@ pub const Uuid = packed union {
                 };
             }
 
-            fn tickTimestamp(self: *@This()) Tick {
-                const ns = self.clock.nanoTimestamp() + Timestamp.ns_unix_offset;
+            fn tickTimestamp(self: *@This(), io: std.Io) Tick {
+                const ns = self.clock.nanoTimestamp(io) + Timestamp.ns_unix_offset;
                 return @intCast(@divFloor(ns, Timestamp.ns_per_tick));
             }
         };
@@ -1444,21 +1445,24 @@ pub const Uuid = packed union {
             };
 
             clock: Clock,
-            rand: Random = std.crypto.random,
             state: std.atomic.Value(State) = .init(.{}),
 
-            pub fn next(self: *@This()) Timestamp {
+            pub fn next(self: *@This(), io: std.Io) Timestamp {
                 var new: State = .{};
-                var prng = std.Random.DefaultPrng.init(self.rand.int(u64));
+
+                const random_source: std.Random.IoSource = .{ .io = io };
+                const rand = random_source.interface();
+
+                var prng = std.Random.DefaultPrng.init(rand.int(u64));
 
                 while (true) {
-                    const tick = self.tickTimestamp();
+                    const tick = self.tickTimestamp(io);
                     const old = self.state.load(.acquire);
                     const max_step = @min(std.math.maxInt(Seq), std.math.maxInt(u16));
 
                     if (tick > old.last) {
                         new.last = tick;
-                        new.seq = self.rand.int(Seq);
+                        new.seq = rand.int(Seq);
                     } else {
                         const result = @addWithOverflow(old.seq, prng.random().uintAtMost(Seq, max_step));
                         if (result[1] != 0) {
@@ -1479,8 +1483,8 @@ pub const Uuid = packed union {
                 }
             }
 
-            fn tickTimestamp(self: *@This()) Tick {
-                const ns = self.clock.nanoTimestamp() + Timestamp.ns_unix_offset;
+            fn tickTimestamp(self: *@This(), io: std.Io) Tick {
+                const ns = self.clock.nanoTimestamp(io) + Timestamp.ns_unix_offset;
                 return @intCast(@divFloor(ns, Timestamp.ns_per_tick));
             }
         };
@@ -1698,14 +1702,16 @@ test "version field compliance" {
     inline for ([_]type{ Uuid.V1, Uuid.V2, Uuid.V3, Uuid.V4, Uuid.V5, Uuid.V6, Uuid.V7, Uuid.V8 }, 1..) |V, version_number| {
         if (version_number == 2) continue;
 
+        const random_source: std.Random.IoSource = .{ .io = std.testing.io };
+
         const uuid = switch (V) {
-            Uuid.V1 => V.now(0x123456789ABC),
+            Uuid.V1 => V.now(0x123456789ABC, std.testing.io),
             Uuid.V2 => unreachable,
             Uuid.V3 => V.init(.dns, "test"),
-            Uuid.V4 => V.init(std.crypto.random),
+            Uuid.V4 => V.init(random_source.interface()),
             Uuid.V5 => V.init(.dns, "test"),
-            Uuid.V6 => V.now(0x123456789ABC),
-            Uuid.V7 => V.now(),
+            Uuid.V6 => V.now(0x123456789ABC, std.testing.io),
+            Uuid.V7 => V.now(std.testing.io),
             Uuid.V8 => V.init(0x123456789ABCDEF0123456789ABCDE),
             else => unreachable,
         };
@@ -1768,8 +1774,8 @@ test "byte array round trip" {
 test "v7 ordering" {
     var seq = Uuid.SafeClockSequence(Uuid.V7.Timestamp).Zero;
 
-    const ts1 = seq.next();
-    var ts2 = seq.next();
+    const ts1 = seq.next(std.testing.io);
+    var ts2 = seq.next(std.testing.io);
     ts2.tick += std.time.ns_per_ms;
 
     const one = Uuid.V7.init(ts1);
@@ -1813,8 +1819,10 @@ test "v4 randomness" {
     var seen = std.AutoHashMap([16]u8, void).init(test_allocator);
     defer seen.deinit();
 
+    const random_source: std.Random.IoSource = .{ .io = std.testing.io };
+
     for (0..10_000) |_| {
-        const uuid = Uuid.V4.init(std.crypto.random);
+        const uuid = Uuid.V4.init(random_source.interface());
         const bytes = uuid.toBytes();
         try std.testing.expect(!seen.contains(bytes));
         try seen.put(bytes, {});
@@ -1850,7 +1858,7 @@ test "field extraction and union conversions" {
 test "version-specific creation" {
     // V1 with timestamp and node
     const node: u48 = 0x123456789ABC;
-    const v1_ts = Uuid.V1.Timestamp.fast();
+    const v1_ts = Uuid.V1.Timestamp.fast(std.testing.io);
     const v1 = Uuid.V1.init(v1_ts, node);
     try std.testing.expectEqual(.v1, v1.getVersion());
     try std.testing.expectEqual(.rfc9562, v1.getVariant());
@@ -1861,8 +1869,9 @@ test "version-specific creation" {
     try std.testing.expectEqual(.v3, v3.getVersion());
     try std.testing.expectEqual(.rfc9562, v3.getVariant());
 
+    const random_source: std.Random.IoSource = .{ .io = std.testing.io };
     // V4 random
-    const v4 = Uuid.V4.init(std.crypto.random);
+    const v4 = Uuid.V4.init(random_source.interface());
     try std.testing.expectEqual(.v4, v4.getVersion());
     try std.testing.expectEqual(.rfc9562, v4.getVariant());
 
@@ -1872,14 +1881,14 @@ test "version-specific creation" {
     try std.testing.expectEqual(.rfc9562, v5.getVariant());
 
     // V6 with timestamp and node
-    const v6_ts = Uuid.V6.Timestamp.fast();
+    const v6_ts = Uuid.V6.Timestamp.fast(std.testing.io);
     const v6 = Uuid.V6.init(v6_ts, node);
     try std.testing.expectEqual(.v6, v6.getVersion());
     try std.testing.expectEqual(.rfc9562, v6.getVariant());
     try std.testing.expectEqual(node, v6.getNode());
 
     // V7 with timestamp
-    const v7_ts = Uuid.V7.Timestamp.fast();
+    const v7_ts = Uuid.V7.Timestamp.fast(std.testing.io);
     const v7 = Uuid.V7.init(v7_ts);
     try std.testing.expectEqual(.v7, v7.getVersion());
     try std.testing.expectEqual(.rfc9562, v7.getVariant());
@@ -1963,7 +1972,7 @@ test "clock sequence randomization" {
     // Generate multiple timestamps and check for sequence variation
     var timestamps: [10]Uuid.V7.Timestamp = undefined;
     for (&timestamps) |*ts| {
-        ts.* = seq.next();
+        ts.* = seq.next(std.testing.io);
     }
 
     // SafeClockSequence should produce different sequence values due to randomization
@@ -1996,35 +2005,35 @@ test "fast clock accumulation" {
     try std.testing.expectEqual(0, seq.last_tick);
     try std.testing.expectEqual(0, seq.acc);
     try std.testing.expectEqual(0, seq.seq);
-    var ts = seq.next();
+    var ts = seq.next(std.testing.io);
     try std.testing.expectEqual(0, ts.tick);
     try std.testing.expectEqual(0, ts.seq);
 
     try std.testing.expectEqual(0, seq.last_tick);
     try std.testing.expectEqual(0, seq.acc);
     try std.testing.expectEqual(1, seq.seq);
-    ts = seq.next();
+    ts = seq.next(std.testing.io);
     try std.testing.expectEqual(0, ts.tick);
     try std.testing.expectEqual(1, ts.seq);
 
     try std.testing.expectEqual(0, seq.last_tick);
     try std.testing.expectEqual(1, seq.acc);
     try std.testing.expectEqual(0, seq.seq);
-    ts = seq.next();
+    ts = seq.next(std.testing.io);
     try std.testing.expectEqual(1, ts.tick);
     try std.testing.expectEqual(0, ts.seq);
 
     try std.testing.expectEqual(0, seq.last_tick);
     try std.testing.expectEqual(1, seq.acc);
     try std.testing.expectEqual(1, seq.seq);
-    ts = seq.next();
+    ts = seq.next(std.testing.io);
     try std.testing.expectEqual(1, ts.tick);
     try std.testing.expectEqual(1, ts.seq);
 
     try std.testing.expectEqual(0, seq.last_tick);
     try std.testing.expectEqual(2, seq.acc);
     try std.testing.expectEqual(0, seq.seq);
-    ts = seq.next();
+    ts = seq.next(std.testing.io);
     try std.testing.expectEqual(2, ts.tick);
     try std.testing.expectEqual(0, ts.seq);
 }
@@ -2034,9 +2043,9 @@ test "single-threaded clock sequence deterministic behavior" {
     var seq = Uuid.FastClockSequence(Uuid.V7.Timestamp).Zero;
 
     // Generate a small number of timestamps to test basic increment behavior
-    const ts1 = seq.next();
-    const ts2 = seq.next();
-    const ts3 = seq.next();
+    const ts1 = seq.next(std.testing.io);
+    const ts2 = seq.next(std.testing.io);
+    const ts3 = seq.next(std.testing.io);
 
     // For zero clock, all timestamps should have the same tick
     try std.testing.expectEqual(ts1.tick, ts2.tick);
@@ -2048,7 +2057,7 @@ test "single-threaded clock sequence deterministic behavior" {
 
     // Test that sequence starts from 0 for Zero clock
     var fresh_seq = Uuid.FastClockSequence(Uuid.V7.Timestamp).Zero;
-    const first_ts = fresh_seq.next();
+    const first_ts = fresh_seq.next(std.testing.io);
     try std.testing.expectEqual(0, first_ts.seq);
 }
 
@@ -2057,9 +2066,9 @@ test "clock sequence behavior with system clock" {
     var seq = Uuid.FastClockSequence(Uuid.V7.Timestamp).System;
 
     // Generate a few timestamps
-    const ts1 = seq.next();
-    const ts2 = seq.next();
-    const ts3 = seq.next();
+    const ts1 = seq.next(std.testing.io);
+    const ts2 = seq.next(std.testing.io);
+    const ts3 = seq.next(std.testing.io);
 
     // All timestamps should be valid
     try std.testing.expect(ts1.tick >= 0);
@@ -2095,7 +2104,7 @@ test "clock sequence thread safety" {
     const worker = struct {
         fn run(args: ThreadArgs) void {
             for (args.results) |*result| {
-                result.* = args.seq.next();
+                result.* = args.seq.next(std.testing.io);
             }
         }
     }.run;
@@ -2156,9 +2165,11 @@ test "format edge cases" {
     defer test_allocator.free(ones_str);
     try std.testing.expectEqualStrings("ffffffff-ffff-ffff-ffff-ffffffffffff", ones_str);
 
+    const random_source: std.Random.IoSource = .{ .io = std.testing.io };
+
     // Test that format length is always consistent
     for (0..100) |_| {
-        const random_uuid = Uuid.V4.init(std.crypto.random);
+        const random_uuid = Uuid.V4.init(random_source.interface());
         const formatted = try std.fmt.allocPrint(test_allocator, "{f}", .{random_uuid});
         defer test_allocator.free(formatted);
         try std.testing.expectEqual(36, formatted.len); // Standard UUID string length

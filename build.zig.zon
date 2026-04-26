@@ -6,8 +6,8 @@
 
     .dependencies = .{
         .uuid_zig = .{
-            .url = "git+https://github.com/r4gus/uuid-zig#58ed00d4df6b08ca2570602758c486989d019693",
-            .hash = "uuid-0.3.2-oOieIY54AACgyWA1nI8rtVBRqHwAg2DPnuKiM2FycatZ",
+            .url = "git+https://codeberg.org/r4gus/uuid-zig.git#c11167d746540066b8cd4793d94fdbe724067d48",
+            .hash = "uuid-0.5.0-oOieIQx-AABtc9U3ihv_bf9pZAYoKp4UMsNFHBr-cn-w",
             .lazy = true,
         },
     },
