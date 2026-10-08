@@ -1426,7 +1426,7 @@ pub const Uuid = packed union(u128) {
 
             pub const State = packed struct(u128) {
                 last: Tick = 0,
-                _: std.meta.Int(.unsigned, 128 - @bitSizeOf(Tick) - @bitSizeOf(Seq)) = 0,
+                _: @Int(.unsigned, 128 - @bitSizeOf(Tick) - @bitSizeOf(Seq)) = 0,
                 seq: Seq = 0,
             };
 
@@ -1504,18 +1504,24 @@ inline fn writeField(comptime T: type, comptime field_name: []const u8, uuid: *T
 }
 
 inline fn fieldBitOffset(comptime T: type, comptime field_name: []const u8) u16 {
-    const fields = std.meta.fields(T);
     comptime var offset = 0;
 
     if (!@hasField(T, field_name)) {
         @compileError("Field '" ++ field_name ++ "' does not exist in type '" ++ @typeName(T) ++ "'");
     }
 
-    inline for (fields) |field| {
-        if (std.mem.eql(u8, field.name, field_name)) {
-            return offset;
-        }
-        offset += @bitSizeOf(field.type);
+    switch (@typeInfo(T)) {
+        .@"struct" => |struct_info| {
+            inline for (struct_info.field_names, 0..) |struct_field_name, field_index| {
+                if (std.mem.eql(u8, struct_field_name, field_name)) {
+                    return 0;
+                }
+                offset += @bitSizeOf(struct_info.field_types[field_index]);
+            }
+        },
+        else => {
+            std.debug.panic("Implement me for {}", .{@tagName(@typeInfo(T))});
+        },
     }
 
     unreachable;
@@ -1716,7 +1722,7 @@ test "version field compliance" {
             else => unreachable,
         };
 
-        try std.testing.expectEqual(@as(u8, version_number), @intFromEnum(uuid.getVersion()));
+        try std.testing.expectEqual(@as(u8, version_number), @backingInt(uuid.getVersion()));
         try std.testing.expectEqual(Uuid.Variant.rfc9562, uuid.getVariant());
     }
 }
@@ -1737,7 +1743,7 @@ test "variant field compliance" {
     };
 
     inline for (test_cases) |case| {
-        var bytes = [_]u8{0} ** 16;
+        var bytes: [16]u8 = @splat(0);
         bytes[8] = case.byte;
 
         const uuid = Uuid.fromBytes(bytes);

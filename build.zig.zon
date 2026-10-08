@@ -2,16 +2,7 @@
     .name = .uuidz,
     .version = "0.1.0",
     .fingerprint = 0x5db60e228db2be64,
-    .minimum_zig_version = "0.15.1",
-
-    .dependencies = .{
-        .uuid_zig = .{
-            .url = "git+https://codeberg.org/r4gus/uuid-zig.git#c11167d746540066b8cd4793d94fdbe724067d48",
-            .hash = "uuid-0.5.0-oOieIQx-AABtc9U3ihv_bf9pZAYoKp4UMsNFHBr-cn-w",
-            .lazy = true,
-        },
-    },
-
+    .minimum_zig_version = "0.17.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

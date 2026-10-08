@@ -37,29 +37,6 @@ pub fn build(b: *std.Build) void {
     const example_step = b.step("example", "Run usage example");
     example_step.dependOn(&run_example.step);
 
-    // Benchmark
-    const benchmark = b.addExecutable(.{
-        .name = "benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmark.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "uuidz", .module = mod },
-            },
-        }),
-        // https://github.com/ziglang/zig/issues/24181
-        .use_llvm = true,
-    });
-
-    if (b.lazyDependency("uuid_zig", .{})) |uuid_zig| {
-        benchmark.root_module.addImport("uuid_zig", uuid_zig.module("uuid"));
-    }
-
-    const run_benchmark = b.addRunArtifact(benchmark);
-    const bench_step = b.step("bench", "Run ClockSequence performance benchmark");
-    bench_step.dependOn(&run_benchmark.step);
-
     // Test
     const tests = b.addTest(.{
         .root_module = mod,
